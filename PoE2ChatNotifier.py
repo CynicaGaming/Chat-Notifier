@@ -117,7 +117,7 @@ class SettingsDialog(QDialog):
         notifications_group.setLayout(notifications_layout)
         main_layout.addWidget(notifications_group)
 
-        # Save and Cancel Buttons
+        # Save, Cancel, and Default Buttons
         buttons_layout = QHBoxLayout()
         buttons_layout.addStretch()
 
@@ -125,6 +125,9 @@ class SettingsDialog(QDialog):
         save_button.clicked.connect(self.save_settings)
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.reject)
+        default_button = QPushButton("Default")
+        default_button.clicked.connect(self.reset_to_default)
+        buttons_layout.addWidget(default_button)
         buttons_layout.addWidget(save_button)
         buttons_layout.addWidget(cancel_button)
 
@@ -188,6 +191,33 @@ class SettingsDialog(QDialog):
             self.accept()
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to save settings: {e}")
+
+    def reset_to_default(self):
+        """
+        Resets the settings to their default values.
+        """
+        default_config = {
+            "theme": "Dark",
+            "font_size": 12,
+            "chat_colors": {
+                "Local": "green",
+                "Global": "red",
+                "Party": "blue",
+                "Whisper": "purple",
+                "Trade": "orange",
+                "Guild": "grey",
+                "System": "yellow",
+            },
+            "enable_whisper_notifications": True,
+        }
+        self.config.update(default_config)
+        self.chat_colors = default_config["chat_colors"].copy()
+        self.theme_combo.setCurrentText(default_config["theme"])
+        self.font_spinbox.setValue(default_config["font_size"])
+        self.whisper_notify_checkbox.setChecked(default_config["enable_whisper_notifications"])
+        for category, button in self.color_buttons.items():
+            button.setStyleSheet(f"background-color: {self.chat_colors[category]}")
+        QMessageBox.information(self, "Default Settings", "Settings have been reset to default.")
 
 
 class POEChatParserApp(QMainWindow):
@@ -767,8 +797,16 @@ class POEChatParserApp(QMainWindow):
         username_part, content = message.split(":", 1)
         username_part = username_part.strip()
 
-        # Determine the message category based on prefixes
-        if message.startswith("#"):
+        # Normalize channel symbols by reducing multiple symbols to one
+        if message.startswith("##"):
+            channel = "#"
+            category = "Global"
+            color = self.config["chat_colors"].get("Global", "red")
+        elif message.startswith("$$"):
+            channel = "$"
+            category = "Trade"
+            color = self.config["chat_colors"].get("Trade", "orange")
+        elif message.startswith("#"):
             channel = "#"
             category = "Global"
             color = self.config["chat_colors"].get("Global", "red")
@@ -807,7 +845,7 @@ class POEChatParserApp(QMainWindow):
         elif category == "Whisper":
             username = username_part[len(channel):].strip()
         else:
-            username = username_part.strip()
+            username = username_part.lstrip(channel).strip()
 
         return channel, username, content.strip(), color, category
 
