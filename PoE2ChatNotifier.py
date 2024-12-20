@@ -36,8 +36,8 @@ class WorkerSignals(QObject):
     """
     Defines custom signals for logging and system messages.
     """
-    log_line = pyqtSignal(str, str, str, str, str, str)
-    system_line = pyqtSignal(str, str)
+    log_line = pyqtSignal(str, str, str, str, str)  # content, timestamp, channel, username, category
+    system_line = pyqtSignal(str, str)  # msg, color
 
 
 class SettingsDialog(QDialog):
@@ -161,6 +161,7 @@ class SettingsDialog(QDialog):
             options=options,
         )
         if file_path:
+            # Update the notify_sound in config
             self.config["notify_sound"] = os.path.basename(file_path)
             # Copy the selected sound to the program directory
             try:
@@ -209,6 +210,7 @@ class SettingsDialog(QDialog):
                 "System": "yellow",
             },
             "enable_whisper_notifications": True,
+            "notify_sound": "notify.wav",
         }
         self.config.update(default_config)
         self.chat_colors = default_config["chat_colors"].copy()
@@ -263,7 +265,8 @@ class POEChatParserApp(QMainWindow):
         self.signals.system_line.connect(self.on_system_line)
 
         # Initialize message storage with deque for efficient FIFO
-        self.messages = deque(maxlen=self.config["message_limits"]["Global"] + 100)
+        # Changed to store (content, timestamp, channel, username, category)
+        self.messages = deque(maxlen=self.config["message_limits"].get("Global", 100) + 100)
 
         # Initialize unread whispers count
         self.unread_whispers = 0
@@ -279,6 +282,8 @@ class POEChatParserApp(QMainWindow):
         # Start monitoring the log file if available
         if self.file_path and os.path.isfile(self.file_path):
             self.executor.submit(self.monitor_file, self.file_path)
+        else:
+            self.signals.system_line.emit("Path of Exile log file not found.", "red")
 
         # Setup configuration reload timer
         self.reload_timer = QTimer()
@@ -592,7 +597,7 @@ class POEChatParserApp(QMainWindow):
         else:
             self.console.setStyleSheet("QTextEdit { background-color: white; color: black; }")
 
-    def on_log_line(self, content, timestamp, channel, username, color, category):
+    def on_log_line(self, content, timestamp, channel, username, category):
         """
         Processes and stores a new log line from the game, then updates the
         chat display.
@@ -602,10 +607,9 @@ class POEChatParserApp(QMainWindow):
             timestamp (str): The timestamp of the message.
             channel (str): The chat channel.
             username (str): The username of the sender.
-            color (str): The color associated with the chat category.
             category (str): The chat category.
         """
-        self.messages.append((content, timestamp, channel, username, color, category))
+        self.messages.append((content, timestamp, channel, username, category))
         self.display_messages()
 
     def on_system_line(self, msg, color):
@@ -618,11 +622,11 @@ class POEChatParserApp(QMainWindow):
             color (str): The color associated with system messages.
         """
         category = "System"
-        self.messages.append((msg, None, None, None, color, category))
+        self.messages.append((msg, None, None, None, category))
         self.display_messages()
 
     def log_to_console(
-        self, message, timestamp=None, channel=None, username=None, color="white"
+        self, message, timestamp=None, channel=None, username=None, category=None
     ):
         """
         Formats and inserts a message into the console display.
@@ -632,8 +636,9 @@ class POEChatParserApp(QMainWindow):
             timestamp (str, optional): The timestamp of the message.
             channel (str, optional): The chat channel.
             username (str, optional): The username of the sender.
-            color (str, optional): The color associated with the message.
+            category (str, optional): The chat category.
         """
+        color = self.config["chat_colors"].get(category, "white")
         html = ""
         if timestamp:
             html += f'<span style="color:{color}">[{timestamp}] </span>'
@@ -660,11 +665,12 @@ class POEChatParserApp(QMainWindow):
     def display_messages(self):
         """
         Refreshes the console display based on current messages and active
-        channel filters.
+        channel filters. This method ensures that chat colors reflect the latest
+        settings.
         """
         self.console.blockSignals(True)
         self.console.clear()
-        for content, timestamp, channel, username, color, category in self.messages:
+        for content, timestamp, channel, username, category in self.messages:
             if username and username in self.config["ignored_users"]:
                 continue
             if category is None or self.channel_filters.get(category, True):
@@ -673,7 +679,7 @@ class POEChatParserApp(QMainWindow):
                     timestamp=timestamp,
                     channel=channel,
                     username=username,
-                    color=color,
+                    category=category,
                 )
         self.console.blockSignals(False)
         self.update_title()
@@ -721,26 +727,24 @@ class POEChatParserApp(QMainWindow):
             parsed = self.parse_message(message)
             if not parsed:
                 return
-            channel, username, content, color, category = parsed
+            channel, username, content, category = parsed
 
             if username and username in self.config["ignored_users"]:
                 return
 
-            if category == "Whisper" and channel.strip().lower().startswith("@from"):
+            # Only trigger notifications for "@From " whisper messages
+            if category == "Whisper" and channel.strip().startswith("@From"):
                 self.unread_whispers += 1
-
-            # Check if whisper notifications are enabled
-            if category == "Whisper" and self.config.get("enable_whisper_notifications", True):
-                self.executor.submit(self.play_notify)
-                if self.isMinimized():
-                    QApplication.alert(self)
+                if self.config.get("enable_whisper_notifications", True):
+                    self.executor.submit(self.play_notify)
+                    if self.isMinimized():
+                        QApplication.alert(self)
 
             self.signals.log_line.emit(
                 content,
-                None if (channel == "" and username is None) else timestamp,
+                timestamp,
                 channel,
                 username,
-                color,
                 category,
             )
         except Exception as e:
@@ -788,8 +792,8 @@ class POEChatParserApp(QMainWindow):
             message (str): The message content.
 
         Returns:
-            tuple or None: A tuple containing channel, username, content, color,
-                           and category if the message is valid, otherwise None.
+            tuple or None: A tuple containing channel, username, content, and category
+                           if the message is valid, otherwise None.
         """
         if ":" not in message:
             return None
@@ -801,43 +805,33 @@ class POEChatParserApp(QMainWindow):
         if message.startswith("##"):
             channel = "#"
             category = "Global"
-            color = self.config["chat_colors"].get("Global", "red")
         elif message.startswith("$$"):
             channel = "$"
             category = "Trade"
-            color = self.config["chat_colors"].get("Trade", "orange")
         elif message.startswith("#"):
             channel = "#"
             category = "Global"
-            color = self.config["chat_colors"].get("Global", "red")
         elif message.startswith("$"):
             channel = "$"
             category = "Trade"
-            color = self.config["chat_colors"].get("Trade", "orange")
         elif message.startswith("&"):
             channel = "&"
             category = "Guild"
-            color = self.config["chat_colors"].get("Guild", "grey")
         elif message.startswith("%"):
             channel = "%"
             category = "Party"
-            color = self.config["chat_colors"].get("Party", "blue")
         elif message.startswith("@From "):
             channel = "@From "
             category = "Whisper"
-            color = self.config["chat_colors"].get("Whisper", "purple")
         elif message.startswith("@To "):
             channel = "@To "
             category = "Whisper"
-            color = self.config["chat_colors"].get("Whisper", "purple")
         elif message.startswith("System:"):
             channel = "System"
             category = "System"
-            color = self.config["chat_colors"].get("System", "yellow")
         else:
             channel = ""
             category = "Local"
-            color = self.config["chat_colors"].get("Local", "green")
 
         # Remove channel symbol from username
         if category == "System":
@@ -845,9 +839,11 @@ class POEChatParserApp(QMainWindow):
         elif category == "Whisper":
             username = username_part[len(channel):].strip()
         else:
+            # For "Global", "Trade", "Guild", "Party", "Local"
+            # Remove only the leading channel symbol(s)
             username = username_part.lstrip(channel).strip()
 
-        return channel, username, content.strip(), color, category
+        return channel, username, content.strip(), category
 
     def show_about(self):
         """
@@ -856,7 +852,7 @@ class POEChatParserApp(QMainWindow):
         QMessageBox.about(
             self,
             "About",
-            "<div style='text-align:center;'>Chat Notifier<br>Version 0.3</div>",
+            "<div style='text-align:center;'>Chat Notifier<br>Version 0.4</div>",
         )
 
     def restore_from_tray(self):
