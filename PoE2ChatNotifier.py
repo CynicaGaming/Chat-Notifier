@@ -696,9 +696,6 @@ class POEChatParserApp(QMainWindow):
             if username and username in self.config["ignored_users"]:
                 return
 
-            if username:
-                username = username.rstrip(":")
-
             if category == "Whisper" and channel.strip().lower().startswith("@from"):
                 self.unread_whispers += 1
 
@@ -768,36 +765,56 @@ class POEChatParserApp(QMainWindow):
             return None
 
         username_part, content = message.split(":", 1)
-        username = username_part.strip()
-
-        if username in self.config["ignored_users"]:
-            return None
+        username_part = username_part.strip()
 
         # Determine the message category based on prefixes
         if message.startswith("#"):
-            return "#", username, content.strip(), self.config["chat_colors"].get("Global", "red"), "Global"
+            channel = "#"
+            category = "Global"
+            color = self.config["chat_colors"].get("Global", "red")
         elif message.startswith("$"):
-            return "$", username, content.strip(), self.config["chat_colors"].get("Trade", "orange"), "Trade"
+            channel = "$"
+            category = "Trade"
+            color = self.config["chat_colors"].get("Trade", "orange")
         elif message.startswith("&"):
-            return "&", username, content.strip(), self.config["chat_colors"].get("Guild", "grey"), "Guild"
+            channel = "&"
+            category = "Guild"
+            color = self.config["chat_colors"].get("Guild", "grey")
         elif message.startswith("%"):
-            return "%", username, content.strip(), self.config["chat_colors"].get("Party", "blue"), "Party"
+            channel = "%"
+            category = "Party"
+            color = self.config["chat_colors"].get("Party", "blue")
         elif message.startswith("@From "):
-            parts = message[6:].split(" ", 1)
-            if len(parts) < 2:
-                return None
-            whisper_user, whisper_content = parts
-            return "@From ", whisper_user, whisper_content.strip(), self.config["chat_colors"].get("Whisper", "purple"), "Whisper"
+            channel = "@From "
+            category = "Whisper"
+            color = self.config["chat_colors"].get("Whisper", "purple")
         elif message.startswith("@To "):
-            parts = message[4:].split(" ", 1)
-            if len(parts) < 2:
-                return None
-            whisper_user, whisper_content = parts
-            return "@To ", whisper_user, whisper_content.strip(), self.config["chat_colors"].get("Whisper", "purple"), "Whisper"
+            channel = "@To "
+            category = "Whisper"
+            color = self.config["chat_colors"].get("Whisper", "purple")
         elif message.startswith("System:"):
-            return "System", None, message[7:].strip(), self.config["chat_colors"].get("System", "yellow"), "System"
+            channel = "System"
+            category = "System"
+            color = self.config["chat_colors"].get("System", "yellow")
         else:
-            return "", username, content.strip(), self.config["chat_colors"].get("Local", "green"), "Local"
+            channel = ""
+            category = "Local"
+            color = self.config["chat_colors"].get("Local", "green")
+
+        # Remove channel symbol from username
+        if channel and category != "System":
+            # For whispers, the channel includes "@From " or "@To ", so adjust accordingly
+            if category == "Whisper":
+                parts = username_part[len(channel):].strip().split(" ", 1)
+                if len(parts) < 2:
+                    return None
+                username, content = parts
+            else:
+                username = username_part[len(channel):].strip()
+        else:
+            username = None  # For system messages
+
+        return channel, username, content.strip(), color, category
 
     def show_about(self):
         """
