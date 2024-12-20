@@ -802,17 +802,12 @@ class POEChatParserApp(QMainWindow):
             color = self.config["chat_colors"].get("Local", "green")
 
         # Remove channel symbol from username
-        if channel and category != "System":
-            # For whispers, the channel includes "@From " or "@To ", so adjust accordingly
-            if category == "Whisper":
-                parts = username_part[len(channel):].strip().split(" ", 1)
-                if len(parts) < 2:
-                    return None
-                username, content = parts
-            else:
-                username = username_part[len(channel):].strip()
+        if category == "System":
+            username = None
+        elif category == "Whisper":
+            username = username_part[len(channel):].strip()
         else:
-            username = None  # For system messages
+            username = username_part.strip()
 
         return channel, username, content.strip(), color, category
 
